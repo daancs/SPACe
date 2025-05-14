@@ -45,14 +45,17 @@ def step2_main_run_loop(args):
     N = seg_class.args.N
     
     args.logger.info(f"Creating {N} tasks for Cellpaint Step 2 ...")
-    data = list(zip(seg_class.args.img_channels_filepaths, seg_class.args.img_filename_keys))
+    data = list(enumerate(zip(seg_class.args.img_channels_filepaths, seg_class.args.img_filename_keys)))
 
-    def run_task_on_gpu(task, gpu_id):
+    def run_task_on_gpu(task):
+        task_index, (img_channels, img_filename) = task
+        gpu_id = task_index % num_gpus  # Assign GPU based on task index
         cellpose_model = cellpose_models[gpu_id][1]
-        return seg_class.run_single(task[0], task[1], cellpose_model=cellpose_model)
+        return seg_class.run_single(img_channels, img_filename, cellpose_model=cellpose_model)
 
+    # Use Dask bag to distribute tasks
     bag = db.from_sequence(data, partition_size=50)
-    tasks = bag.map(lambda x, gpu_id: run_task_on_gpu(x, gpu_id=x[1] % num_gpus), range(len(data)))
+    tasks = bag.map(run_task_on_gpu)
     return tasks    
     
 
