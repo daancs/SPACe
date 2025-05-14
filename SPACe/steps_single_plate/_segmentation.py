@@ -64,11 +64,11 @@ class SegmentationPartI:
     # meta_cols = ["exp-id", "well-id", "fov", "treatment", "cell-line", "density", "dosage", "other"]
     # stages = ["0-raw-image", "2-bgsub-image"]
 
-    def __init__(self, args, cellpose_model):
+    def __init__(self, args):
         """self.N is the total number of images (when all their channels are grouped together) in the
         args.main_path\args.experiment\args.plate_protocol folder."""
         self.args = args
-        self.cellpose_model = cellpose_model
+        # self.cellpose_model = cellpose_model
 
         if self.args.mode == "preview":
             self.save_path = self.args.output_path / self.args.experiment / f"Step0_MasksP1-Preview"
@@ -77,14 +77,14 @@ class SegmentationPartI:
             self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksP1"
             self.save_path.mkdir(exist_ok=True, parents=True)
 
-    def get_cellpose_masks(self, img_channels_filepaths, img_filename_key):
+    def get_cellpose_masks(self, img_channels_filepaths, img_filename_key, cellpose_model):
         """
         cellpose-segmentation of a single image:
         Segment the nucleus and cytoplasm channels using Cellpose then save the masks to disk."""
 
         # # stime = time.time()
         # load, rescale/contrast-enhance, and background subtraction the images using the tophat filter!!!
-        
+        self.cellpose_model = cellpose_model
         img = load_img(img_channels_filepaths, self.args)
 
         
@@ -164,8 +164,8 @@ class SegmentationPartI:
 
         return w1_mask, w2_mask
 
-    def run_single(self, img_channels_filepaths, img_filename_key):
-        w1_mask, w2_mask = self.get_cellpose_masks(img_channels_filepaths, img_filename_key)
+    def run_single(self, img_channels_filepaths, img_filename_key, cellpose_model):
+        w1_mask, w2_mask = self.get_cellpose_masks(img_channels_filepaths, img_filename_key, cellpose_model)
         ########################################################################################################
         # Save the masks into disk
         # Create a savename choosing a name for the experiment name, and also using the well_id, and fov.

@@ -14,9 +14,17 @@ os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 def chunkify(lst, n):
     return [lst[i::n] for i in range(n)]
 
-def create_model(args):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    return models.Cellpose(gpu=True, model_type=args.cellpose_model_type, device=device)
+def create_models(args):
+    num_gpus = torch.cuda.device_count()
+    models_per_gpu = []
+    for gpu_id in range(num_gpus):
+        device = torch.device(f"cuda:{gpu_id}" if torch.cuda.is_available() else "cpu")
+        model = models.Cellpose(gpu=True, model_type=args.cellpose_model_type, device=device)
+        models_per_gpu.append((gpu_id, model))
+
+    return models_per_gpu
+    
+
 
 def step2_main_run_loop(args):
     """
@@ -30,15 +38,21 @@ def step2_main_run_loop(args):
     """
     args.logger.info("Cellpaint Step 2: Cellpose segmentation of Nucleus and Cytoplasm ...")
 
-    cellpose_model = create_model(args)
-    seg_class = SegmentationPartI(args, cellpose_model=cellpose_model)
+    cellpose_models = create_models(args)
+    num_gpus = len(cellpose_models)
+    args.logger.info(f"Found {num_gpus} GPUs for Cellpose segmentation.")
+    seg_class = SegmentationPartI(args)
     N = seg_class.args.N
     
     args.logger.info(f"Creating {N} tasks for Cellpaint Step 2 ...")
     data = list(zip(seg_class.args.img_channels_filepaths, seg_class.args.img_filename_keys))
 
+    def run_task_on_gpu(task, gpu_id):
+        cellpose_model = cellpose_models[gpu_id][1]
+        return seg_class.run_single(task[0], task[1], cellpose_model=cellpose_model)
+
     bag = db.from_sequence(data, partition_size=50)
-    tasks = bag.map(lambda x: seg_class.run_single(x[0], x[1]))
+    tasks = bag.map(lambda x, gpu_id: run_task_on_gpu(x, gpu_id=x[1] % num_gpus), range(len(data)))
     return tasks    
     
 
