@@ -2,38 +2,35 @@ import os
 import time
 from tqdm import tqdm
 import multiprocessing as mp
+from pathlib import WindowsPath
 import matplotlib.pyplot as plt
 
 import cv2
 import sympy
-import numpy as npy
-import cupy as np
+import numpy as np
 import SimpleITK as sitk
+from PIL import Image, ImageFilter
 import skimage.io as sio
 from skimage.measure import label
 from skimage.color import label2rgb
 from skimage.exposure import rescale_intensity
 from skimage.filters import threshold_otsu, gaussian
-from skimage.segmentation import find_boundaries
+from skimage.segmentation import watershed, expand_labels, find_boundaries, clear_border
 from skimage.morphology import disk, erosion, dilation, closing, \
-    binary_dilation
+    binary_dilation, binary_erosion, binary_closing, remove_small_objects, convex_hull_image
 
 from scipy.spatial import distance
 from scipy.ndimage import find_objects
 
-
 from cellpose import models
 import pyclesperanto_prototype as cle
 
-from SPACe.SPACe.steps_single_plate.step0_args import Args, \
+from SPACe.steps_single_plate.step0_args import Args, \
     load_img, sort_key_for_imgs, sort_key_for_masks, set_mask_save_name
 
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 device = cle.select_device("RTX")
-
-
-
 
 
 class SegmentationPartI:
@@ -64,14 +61,14 @@ class SegmentationPartI:
     # meta_cols = ["exp-id", "well-id", "fov", "treatment", "cell-line", "density", "dosage", "other"]
     # stages = ["0-raw-image", "2-bgsub-image"]
 
-    def __init__(self, args, cellpose_model):
+    def __init__(self, args):
         """self.N is the total number of images (when all their channels are grouped together) in the
         args.main_path\args.experiment\args.plate_protocol folder."""
         self.args = args
-        self.cellpose_model = cellpose_model
+        self.cellpose_model = models.Cellpose(gpu=True, model_type=self.args.cellpose_model_type, net_avg=False)
 
         if self.args.mode == "preview":
-            self.save_path = self.args.output_path / self.args.experiment / f"Step0_MasksP1-Preview"
+            self.save_path = self.args.main_path / self.args.experiment / f"Step0_MasksP1-Preview"
             self.save_path.mkdir(exist_ok=True, parents=True)
         else:
             self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksP1"
@@ -84,10 +81,8 @@ class SegmentationPartI:
 
         # # stime = time.time()
         # load, rescale/contrast-enhance, and background subtraction the images using the tophat filter!!!
-        
         img = load_img(img_channels_filepaths, self.args)
 
-        
         if self.args.step2_segmentation_algorithm == "w1=cellpose_w2=cellpose":  # recommended
             # get nucleus and cyto masks using cellpose
             w1_mask, _, _, _ = self.cellpose_model.eval(
@@ -99,7 +94,6 @@ class SegmentationPartI:
                 channel_axis=None,
                 resample=False,
                 min_size=self.args.min_sizes["w1"],
-                flow_threshold=0
             )
 
             w2_mask, _, _, _ = self.cellpose_model.eval(
@@ -110,8 +104,7 @@ class SegmentationPartI:
                 z_axis=None,
                 channel_axis=None,
                 resample=False,
-                min_size=self.args.min_sizes["w2"],
-                flow_threshold=0)
+                min_size=self.args.min_sizes["w2"])
         # # print(f"cellpose w1 takes {time.time()-stime} seconds")
         ###########################################################################################
         elif self.args.step2_segmentation_algorithm == "w1=pycle_w2=pycle":
@@ -174,12 +167,6 @@ class SegmentationPartI:
 
         w1_mask = np.uint16(w1_mask)
         w2_mask = np.uint16(w2_mask)
-
-        # print(f"w1_mask sum p1: {np.sum(w1_mask)}")
-        # print(f"w2_mask sum p1: {np.sum(w2_mask)}")
-
-        # Image.fromarray(w1_mask).save(self.save_path / set_mask_save_name(well_id, fov, 0))
-        # Image.fromarray(w2_mask).save(self.save_path / set_mask_save_name(well_id, fov, 1))
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 0), w1_mask, check_contrast=False)
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 1), w2_mask, check_contrast=False)
         # print(f"saving {time.time() - et}")
@@ -218,14 +205,13 @@ class SegmentationPartII:
         self.show_masks = show_masks
 
         if self.args.mode == "preview":
-            self.load_path = self.args.output_path / self.args.experiment / f"Step0_MasksP1-Preview"
-            self.save_path = self.args.output_path / self.args.experiment / f"Step0_MasksP2-Preview"
-            self.save_path2 = self.args.output_path / self.args.experiment / f"Step0_MasksColor-Preview"
+            self.load_path = self.args.main_path / self.args.experiment / f"Step0_MasksP1-Preview"
+            self.save_path = self.args.main_path / self.args.experiment / f"Step0_MasksP2-Preview"
             self.num_workers = self.args.N
         else:
-            self.load_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step-1}_MasksP1"
-            self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksP2"
-            self.save_path2 = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksColor"
+            self.load_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step-1}_MasksP1"
+            self.save_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_MasksP2"
+            self.save_path2 = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_MasksColor"
         self.save_path.mkdir(exist_ok=True, parents=True)
         self.save_path2.mkdir(exist_ok=True, parents=True)
 
@@ -300,36 +286,11 @@ class SegmentationPartII:
             axes[1, 3].imshow(label2rgb(w5_mask), cmap="gray")
             plt.show()
 
-        
-        
-        # print(f"w1_mask sum: {np.sum(w1_mask)}")
-        # print(f"w2_mask sum: {np.sum(w2_mask)}")
-        # print(f"w3_mask sum: {np.sum(w3_mask)}")
-        # print(f"w5_mask sum: {np.sum(w5_mask)}")
-
         # 4) save
-        
-        if isinstance(w1_mask, np.ndarray):
-            w1_mask = w1_mask.get()
-        if isinstance(w2_mask, np.ndarray):
-            w2_mask = w2_mask.get()
-        if isinstance(w3_mask, np.ndarray):
-            w3_mask = w3_mask.get()
-        if isinstance(w5_mask, np.ndarray):
-            w5_mask = w5_mask.get()
-
-
-
-
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 0), w1_mask, check_contrast=False)
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 1), w2_mask, check_contrast=False)
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 2), w3_mask, check_contrast=False)
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 4), w5_mask, check_contrast=False)
-        # Image.fromarray(w1_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 0))
-        # Image.fromarray(w2_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 1))
-        # Image.fromarray(w3_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 2))
-        # Image.fromarray(w5_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 4))
-
 
     def run_multi(self, index):
         # 0) Get keys
@@ -345,9 +306,6 @@ class SegmentationPartII:
         w1_mask = cv2.imread(str(w1_mask_path), cv2.IMREAD_UNCHANGED)
         w2_mask = cv2.imread(str(w2_mask_path), cv2.IMREAD_UNCHANGED)
 
-        # print(f"w1_mask sum PRE: {np.sum(w1_mask)}")
-        # print(f"w2_mask sum PRE: {np.sum(w2_mask)}")
-
         # 2) Generate masks
         w1_mask, w2_mask = self.step1_preprocessing_and_w1w2_label_matching(img, w1_mask, w2_mask)
         w3_mask, w5_mask = self.step2_get_nucleoli_and_mito_masks_v2(img, w1_mask, w2_mask)
@@ -358,13 +316,6 @@ class SegmentationPartII:
         save_name_3 = str(self.save_path2 / set_mask_save_name(well_id, fov, 2))
         save_name_4 = str(self.save_path2 / set_mask_save_name(well_id, fov, 4))
 
-
-        # print(f"w1_mask sum: {np.sum(w1_mask)}")
-        # print(f"w2_mask sum: {np.sum(w2_mask)}")
-        # print(f"w3_mask sum: {np.sum(w3_mask)}")
-        # print(f"w5_mask sum: {np.sum(w5_mask)}")
-
-
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 0), w1_mask, check_contrast=False)
         cv2.imwrite(save_name_1, label2rgb(w1_mask, bg_label=0)) #This Works. Try making another variable to hold the name
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 1), w2_mask, check_contrast=False)
@@ -373,10 +324,6 @@ class SegmentationPartII:
         cv2.imwrite(save_name_3, label2rgb(w3_mask, bg_label=0))
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 4), w5_mask, check_contrast=False)
         cv2.imwrite(save_name_4, label2rgb(w5_mask, bg_label=0))
-        # Image.fromarray(w1_mask).save(self.save_path / set_mask_save_name(well_id, fov, 0))
-        # Image.fromarray(w2_mask).save(self.save_path / set_mask_save_name(well_id, fov, 1))
-        # Image.fromarray(w3_mask).save(self.save_path / set_mask_save_name(well_id, fov, 2))
-        # Image.fromarray(w5_mask).save(self.save_path / set_mask_save_name(well_id, fov, 4))
 
         # print(self.save_path2 / set_mask_save_name(well_id, fov, 0))
         #
@@ -406,14 +353,9 @@ class SegmentationPartII:
         w1_mask = w1_mask.astype(np.uint32)
         w2_mask = w2_mask.astype(np.uint32)
 
-
         # slightly smoothen the masks
-        # print(f"before smoothening: w1_mask sum: {np.sum(w1_mask)}")
         w1_mask = closing(w1_mask, disk(4))
         w2_mask = closing(w2_mask, disk(4))
-        w1_mask = np.array(w1_mask)
-        w2_mask = np.array(w2_mask)
-        # print(f"after smoothening: w1_mask sum: {np.sum(w1_mask)}")
 
         # fig, axes = plt.subplots(2, 2, sharex=True, sharey=True)
         # axes[0, 0].imshow(img[0], cmap="gray")
@@ -432,15 +374,11 @@ class SegmentationPartII:
 
         # remove cells touching the border in w1_mask, and the ones
         # touching the border in w2 mask which don't contain any nucleus
-
-        # print(f"border-ids: {np.unique(w1_mask[border_mask])}")
-        # print(f"w1_mask sum before border removal: {np.sum(w1_mask)}")
         w1_border_ids = np.unique(w1_mask[border_mask])
         w1_mask[np.isin(w1_mask, w1_border_ids)] = 0
         w2_border_ids = np.unique(w2_mask[border_mask & (w1_mask == 0)])
         w2_mask[np.isin(w2_mask, w2_border_ids)] = 0
         # print(w1_border_ids, w2_border_ids)
-        # print(f"w1_mask sum after border removal: {np.sum(w1_mask)}")
 
         if np.sum(w1_mask) == 0 or np.sum(w2_mask) == 0:
             print("no pixels detected ...")
@@ -454,15 +392,9 @@ class SegmentationPartII:
         # intersect_ratio between a nucleus and cyto channel will happen at multiple cyto instances/labels,
         # we have to choose the one with the largest intersection portion,
         # otherwise, if the intersection is not significant we just label the cyto same as the expanded nucleus
-        # print(f"w1_mask sum: {np.sum(w1_mask)}")
-        # print(f"w2_mask sum: {np.sum(w2_mask)}")
-        # print(f"w1_mask type: {w1_mask.dtype}")
-        # print(f"w2_mask type: {w2_mask.dtype}")
         intersect_ratios, w1_mask, w2_mask = self.get_interect_area_over_w1_area_ratios(w1_mask, w2_mask)
-
-        m1, m2 = np.amax(w1_mask).item(), np.amax(w2_mask).item()
-
-        w1_slices = find_objects(w1_mask.get(), max_label=m1)
+        m1, m2 = np.amax(w1_mask), np.amax(w2_mask)
+        w1_slices = find_objects(w1_mask, max_label=m1)
         # w1_unix = np.setdiff1d(np.unique(w1_mask), 0)
         low_intersect_ids = []
         for ii, slc1 in enumerate(w1_slices):
@@ -491,10 +423,7 @@ class SegmentationPartII:
             # axes[1, 1].imshow(w2_bbox_before, cmap="gray")
             # axes[1, 2].imshow(np.where(w1_bbox, w2_mask[slc1], 0), cmap="gray")
             # plt.show()
-        w1_mask_dil = dilation(w1_mask.get(), disk(4))
-        low_intersect_ids = np.array(low_intersect_ids)
-        w1_mask_dil = np.array(w1_mask_dil)
-        w2_mask = np.array(w2_mask)
+        w1_mask_dil = dilation(w1_mask, disk(4))
         w1_mask_dil = np.where(np.isin(w1_mask_dil, low_intersect_ids), w1_mask_dil, 0)
         w2_mask = np.where(w1_mask_dil, w1_mask_dil, w2_mask)
         w2_mask[(np.bincount(w2_mask.ravel()) < self.args.min_sizes["w2"])[w2_mask]] = 0
@@ -523,34 +452,25 @@ class SegmentationPartII:
 
         w1_count = max_
         w2_count = max_
-
-        w2_slices = find_objects(w2_mask.get(), max_label=m2.item())
-        # w2_slices = np.array(w2_slices)
+        w2_slices = find_objects(w2_mask, max_label=m2)
         for jj, slc2 in enumerate(w2_slices):
             if slc2 is None:
                 continue
-
-            # print(f"jj: {jj}")
-            # print(f"slc2: {slc2}")
-            # jj = np.array(jj)
-            # slc2 = npy.array(slc2)
-
             w2_label = jj + 1
             w2_mask_bbox = w2_mask[slc2] == w2_label
-            w1_mask_bbox = npy.where(w2_mask_bbox, w1_mask[slc2], 0)
+            w1_mask_bbox = np.where(w2_mask_bbox, w1_mask[slc2], 0)
 
             # kill small labeled nucleus tiny pieces in w1_mask_bbox covered by w2_mask_bbox
             # update the w2_mask under slc2 as well
-            area_cond = (npy.bincount(w1_mask_bbox.ravel()) < self.args.min_sizes["w1"])[w1_mask_bbox]
+            area_cond = (np.bincount(w1_mask_bbox.ravel()) < self.args.min_sizes["w1"])[w1_mask_bbox]
             w1_mask_bbox[area_cond] = 0
             w2_mask_bbox[area_cond] = 0
             w2_mask[slc2][area_cond] = 0
 
-            w1_unix = npy.setdiff1d(np.unique(w1_mask_bbox), 0)
-            w1_img_bbox = npy.where(w2_mask_bbox.get(), img[0][slc2], 0)
-            w1_mask_bbox = w1_mask_bbox.get()
-            w1_img_bbox_sitk = sitk.GetImageFromArray(w1_img_bbox.astype(np.uint8))
-            w1_mask_bbox_sitk = sitk.GetImageFromArray(w1_mask_bbox.astype(np.uint8))
+            w1_unix = np.setdiff1d(np.unique(w1_mask_bbox), 0)
+            w1_img_bbox = np.where(w2_mask_bbox, img[0][slc2], 0)
+            w1_img_bbox_sitk = sitk.GetImageFromArray(w1_img_bbox)
+            w1_mask_bbox_sitk = sitk.GetImageFromArray(w1_mask_bbox)
 
             # fig, axes = plt.subplots(2, 2, sharex=True, sharey=True)
             # axes[0, 0].imshow(w1_img_bbox, cmap="gray")
@@ -566,7 +486,6 @@ class SegmentationPartII:
                 # segment the w1/nucleus channel under w2_mask
                 w1_mask_bbox = sitk.GetArrayFromImage(self.otsu_filter.Execute(w1_img_bbox_sitk))
                 w1_mask_bbox = label(w1_mask_bbox, connectivity=2)
-                w1_mask_bbox = np.array(w1_mask_bbox)
                 w1_mask_bbox[(np.bincount(w1_mask_bbox.ravel()) < self.args.min_sizes["w1"])[w1_mask_bbox]] = 0
                 if np.sum(w1_mask_bbox) > 0:
                     w1_mask[slc2] = np.where(w1_mask_bbox, w1_count, w1_mask[slc2])
@@ -589,12 +508,11 @@ class SegmentationPartII:
 
             else:
                 # get apdc: average pairwise distances of centroid
-                w2_mask_bbox_sitk = sitk.GetImageFromArray(w2_mask_bbox.get().astype(np.uint8))
+                w2_mask_bbox_sitk = sitk.GetImageFromArray(w2_mask_bbox.astype(np.uint8))
                 label_intensity_stats_filter.Execute(w1_mask_bbox_sitk, w1_img_bbox_sitk)
                 w1_labels = label_intensity_stats_filter.GetLabels()
 
                 centroids = np.zeros((len(w1_labels), 2), dtype=np.float32)
-                centroids = centroids.get()
                 for kk, w1_label in enumerate(w1_labels):
                     centroids[kk] = w1_img_bbox_sitk.TransformPhysicalPointToIndex(
                         label_intensity_stats_filter.GetCenterOfGravity(w1_label))
@@ -604,7 +522,7 @@ class SegmentationPartII:
                     continue
                 else:  # segment the cytoplasm mask using watershed
                     w2_mask_bbox_wsd = sitk.MorphologicalWatershedFromMarkers(
-                        sitk.SignedMaurerDistanceMap((w2_mask_bbox_sitk) != 0),
+                        sitk.SignedMaurerDistanceMap(w2_mask_bbox_sitk != 0),
                         w1_mask_bbox_sitk,
                         markWatershedLine=False)
                     w2_mask_bbox_wsd = sitk.GetArrayFromImage(sitk.Mask(
@@ -618,10 +536,7 @@ class SegmentationPartII:
                     # axes[0, 2].imshow(label2rgb(w2_mask_bbox_wsd), cmap="gray")
                     # axes[1, 2].axis("off")
                     # plt.show()
-                    # w2_mask_bbox_wsd = np.array(w2_mask_bbox_wsd)
-                    w2_mask_bbox_wsd[w2_mask_bbox_wsd != 0] += npy.uint32(w2_count.item())
-                    w2_mask_bbox_wsd = np.asarray(w2_mask_bbox_wsd)
-                    w2_mask_bbox = np.asarray(w2_mask_bbox)
+                    w2_mask_bbox_wsd[w2_mask_bbox_wsd != 0] += w2_count
                     w2_mask[slc2] = np.where(w2_mask_bbox, w2_mask_bbox_wsd, w2_mask[slc2])
                     w2_count += int(np.amax(w2_mask_bbox_wsd))
         # print(f"part 3 completion time in seconds: {time.time()-stime}")
@@ -640,7 +555,7 @@ class SegmentationPartII:
             w2_unix = np.setdiff1d(w2_unix, diff2)
             # print(diff_)
         # print(len(w1_unix), len(w2_unix))
-        w2_mask = dilation(w2_mask.get(), disk(4))
+        w2_mask = dilation(w2_mask, disk(4))
         assert np.array_equal(w1_unix, w2_unix)
 
         # print(f"part 4 completion time in seconds: {time.time()-stime}")
@@ -661,20 +576,18 @@ class SegmentationPartII:
             return w3_mask, w5_mask
 
         # w5: mito channel
-        w5_img = npy.where(erosion(w1_mask.get(), disk(2)) | (w2_mask == 0), 0, img[4])
-        w5_mask_global = sitk.GetArrayFromImage(self.otsu_filter.Execute(sitk.GetImageFromArray(w5_img.astype(np.uint8))))
+        w5_img = np.where(erosion(w1_mask, disk(2)) | (w2_mask == 0), 0, img[4])
+        w5_mask_global = sitk.GetArrayFromImage(self.otsu_filter.Execute(sitk.GetImageFromArray(w5_img)))
         w5_mask_global = w5_mask_global.astype(np.uint16)
         w5_mask_local = np.zeros_like(img[4], dtype=np.uint16)
         # create cytoplasmic mask excluding the nucleus
-        w1_mask, w2_mask = np.array(w1_mask), np.array(w2_mask)
         cyto_mask = np.where(w1_mask > 0, 0, w2_mask)
 
         # w3: nucleoli channel
         w3_mask = np.zeros_like(cyto_mask, dtype=np.uint16)
         max_ = int(np.amax(cyto_mask))
-        
-        nucleus_slices = find_objects(w1_mask.get(), max_label=max_)
-        cyto_slices = find_objects(cyto_mask.get(), max_label=max_)
+        nucleus_slices = find_objects(w1_mask, max_label=max_)
+        cyto_slices = find_objects(cyto_mask, max_label=max_)
 
         for ii, (slc1, slc2) in enumerate(zip(nucleus_slices, cyto_slices)):
             # print(ii)
@@ -685,14 +598,13 @@ class SegmentationPartII:
             w5_bbox = cyto_mask[slc2] == obj_label
             ####################################################################
             # local mito mask calculation
-            w5_img_tmp = npy.where(w5_bbox.get(), w5_img[slc2], 0)
-            lb = npy.sum(w5_img_tmp < threshold_otsu(w5_img_tmp)) / npy.size(w5_img_tmp)
-            in_range = tuple(npy.percentile(w5_img_tmp, (lb, 99.9)))
+            w5_img_tmp = np.where(w5_bbox, w5_img[slc2], 0)
+            lb = np.sum(w5_img_tmp < threshold_otsu(w5_img_tmp)) / np.size(w5_img_tmp)
+            in_range = tuple(np.percentile(w5_img_tmp, (lb, 99.9)))
             w5_img_tmp = rescale_intensity(w5_img_tmp, in_range=in_range)
-            w5_mask_tmp = sitk.GetArrayFromImage(self.otsu_filter.Execute(sitk.GetImageFromArray(w5_img_tmp.astype(np.uint8))))
+            w5_mask_tmp = sitk.GetArrayFromImage(self.otsu_filter.Execute(sitk.GetImageFromArray(w5_img_tmp)))
             # w5_mask_tmp = np.where(w5_mask_tmp, obj_label, 0)
-            # w5_mask_local = w5_mask_local.get()
-            w5_mask_local[slc2] = np.asarray(npy.where(w5_bbox.get(), w5_mask_tmp, 0))
+            w5_mask_local[slc2] = np.where(w5_bbox, w5_mask_tmp, 0)
             # fig, axes = plt.subplots(2, 3, sharex=True, sharey=True)
             # axes[0, 0].imshow(np.where(w3_bbox, img[0][slc], 0), cmap="gray")
             # axes[0, 1].imshow(np.where(w5_bbox, img[1][slc], 0), cmap="gray")
@@ -703,28 +615,26 @@ class SegmentationPartII:
             # plt.show()
             ####################################################################################
             # local nucleoli calculation
-            w3_img_tmp = npy.where(w3_bbox.get(), img[2][slc1], 0)
+            w3_img_tmp = np.where(w3_bbox, img[2][slc1], 0)
             if self.args.plate_protocol in ["greiner", "perkinelmer"]:
-                lb = npy.sum(w3_img_tmp < threshold_otsu(w3_img_tmp)) / npy.size(w3_img_tmp)
+                lb = np.sum(w3_img_tmp < threshold_otsu(w3_img_tmp)) / np.size(w3_img_tmp)
             else:
                 lb = .1
             w3_img_tmp = gaussian(w3_img_tmp, sigma=2)
             # prc = tuple(np.percentile(
             #     w3_img_tmp,
             #     (self.w3_local_rescale_intensity_lb, self.w3_local_rescale_intensity_ub)))
-            in_range = tuple(npy.percentile(w3_img_tmp, (lb, self.args.w3_local_rescale_intensity_ub)))
+            in_range = tuple(np.percentile(w3_img_tmp, (lb, self.args.w3_local_rescale_intensity_ub)))
             w3_img_tmp = rescale_intensity(w3_img_tmp, in_range=in_range)  # (40, 88), (30, 95)
             w3_mask_tmp = sitk.GetArrayFromImage(self.yen_filter.Execute(
-                sitk.GetImageFromArray(w3_img_tmp.astype(np.uint8))))
+                sitk.GetImageFromArray(w3_img_tmp)))
             # w3_mask_tmp = binary_erosion(w3_mask_tmp, disk(1))
             w3_mask_tmp = label(w3_mask_tmp, connectivity=2)
 
             # remove small and large segmented nucleoli
-            
-            w3_bbox_area = np.sum(w3_bbox.get())
+            w3_bbox_area = np.sum(w3_bbox)
             min_nucleoli_size = self.args.min_nucleoli_size_multiplier * w3_bbox_area
             max_nucleoli_size = self.args.max_nucleoli_size_multiplier * w3_bbox_area
-            w3_mask_tmp = np.array(w3_mask_tmp)
             areas = np.bincount(w3_mask_tmp.ravel())[w3_mask_tmp]
             cond = (areas < min_nucleoli_size) | (areas > max_nucleoli_size)
             w3_mask_tmp[cond] = 0
@@ -737,14 +647,13 @@ class SegmentationPartII:
                     ((self.nucleoli_bd_pad, self.nucleoli_bd_pad),
                      (self.nucleoli_bd_pad, self.nucleoli_bd_pad)),
                     constant_values=(0, 0))
-                bd = find_boundaries(w3_bbox_padded.get(), connectivity=2)
+                bd = find_boundaries(w3_bbox_padded, connectivity=2)
                 bd = bd[
                      self.nucleoli_bd_pad:-self.nucleoli_bd_pad,
                      self.nucleoli_bd_pad:-self.nucleoli_bd_pad]
                 if self.args.plate_protocol in ["greiner", "perkinelmer"]:
                     bd = binary_dilation(bd, disk(2))
-                # bd to cupy
-                bd = np.asarray(bd)
+
                 w3_tmp_bd_mask = w3_mask_tmp * bd
                 bd_areas = np.bincount(w3_tmp_bd_mask.ravel())[w3_tmp_bd_mask]
                 area_ratio = areas/bd_areas
@@ -762,7 +671,7 @@ class SegmentationPartII:
             w3_mask[slc1][w3_mask_tmp > 0] = obj_label
 
         # mito mask
-        w5_mask = np.logical_or(np.asarray(w5_mask_global), w5_mask_local).astype(np.uint16)
+        w5_mask = np.logical_or(w5_mask_global, w5_mask_local).astype(np.uint16)
         w5_mask *= cyto_mask
         w3_mask[(np.bincount(w3_mask.ravel()) < self.args.min_sizes["w3"])[w3_mask]] = 0
         w5_mask[(np.bincount(w5_mask.ravel()) < self.args.min_sizes["w5"])[w5_mask]] = 0
@@ -800,19 +709,12 @@ class SegmentationPartII:
     def get_interect_area_over_w1_area_ratios(self, w1_mask, w2_mask):
         # translate both masks to make sure no two product of values are the same,
         # to create the intersect mask
-        w2_mask = w2_mask.astype(npy.uint32)
-        w1_mask = w1_mask.astype(npy.uint32)
-        max1, max2 = npy.amax(w1_mask), npy.amax(w2_mask)
-        # print(f"max1, max2: {max1}, {max2}")
-        max_n = npy.maximum(max1, max2)
-        # print(f"max_ before prime: {max_n}")
-        max_p = self.PrevPrime_Reference(max_n+200)
-        # print(f"max_p after prime: {max_p}")
+        max1, max2 = np.amax(w1_mask), np.amax(w2_mask)
+        max_ = np.maximum(max1, max2)
+        max_p = self.PrevPrime_Reference(max_+200)
+
         w2_mask[w2_mask > 0] += max_p - 1
         w1_mask[w1_mask > 0] += 1
-
-        w1_mask = w1_mask.astype(np.uint32)
-        w2_mask = w2_mask.astype(np.uint32)
 
         # if max_p > 900:  # to avoid overflow
         #     w1_mask = np.uint32(w1_mask)
@@ -826,23 +728,18 @@ class SegmentationPartII:
         intersect_ratio = (intersect_area / w1_area)
         return intersect_ratio, w1_mask, w2_mask
 
-    
-    def PrevPrime_Reference(self, N):
+    @staticmethod
+    def PrevPrime_Reference(N):
         """https://stackoverflow.com/questions/68907414/
         faster-way-to-find-the-biggest-prime-number-less-than-or-equal-to-the-given-inpu"""
         # tim = time.time()
-        N = int(N)
         for i in range(1 << 14):
-            # print(f'Iteration {i}', flush = True)
             p = N - i
-            # print(f'p = {p}', flush = True)
             if (p & 1) == 0:
-                # print(f'Even {p}', flush = True)
                 continue
             if sympy.isprime(p):
-                # print(f'Prime {p}', flush = True)
                 # tim = time.time() - tim
-                # print(f'ReferenceTime {tim:.3f} sec', flush = True)
+                # print(f'ReferenceTime {tim:.3f} sec', flush=True)
                 return p
 
     @staticmethod
@@ -865,4 +762,3 @@ class SegmentationPartII:
                 info_mat[ii, jj, 4] = area3 / area1
                 # print(ii, jj, area1, area2, area3)
         return info_mat
-

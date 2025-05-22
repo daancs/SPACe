@@ -1,32 +1,29 @@
 import time
 from tqdm import tqdm
-# from pathlib import WindowsPath
+from pathlib import WindowsPath
 
 
 import numpy as np
 import pandas as pd
 
 import cv2
-# import tifffile
-# import skimage.io as sio
+import tifffile
+import skimage.io as sio
 from skimage.measure import label
 from scipy.ndimage import find_objects
-# from scipy.stats import median_abs_deviation
+from scipy.stats import median_abs_deviation
 
-from SPACe.SPACe.utils.shared_memory import MyBaseManager, TestProxy, create_shared_np_num_arr
-from SPACe.SPACe.utils.skimage_regionprops_extension import RegionPropertiesExtension, TEXTURE_FEATURE_NAMES
-from SPACe.SPACe.steps_single_plate.step0_args import Args, load_img, \
+from SPACe.utils.shared_memory import MyBaseManager, TestProxy, create_shared_np_num_arr
+from SPACe.utils.skimage_regionprops_extension import RegionPropertiesExtension, TEXTURE_FEATURE_NAMES
+from SPACe.steps_single_plate.step0_args import Args, load_img, \
     sort_key_for_imgs, sort_key_for_masks, containsLetterAndNumber
 
 import re
 import warnings
-# from PIL import Image
-# from ctypes import c_int, c_float
+from PIL import Image
+from ctypes import c_int, c_float
 import multiprocessing as mp
-# from functools import partial, lru_cache
-
-import dask.bag as db
-import dask.array as da
+from functools import partial, lru_cache
 
 
 class FeatureExtractor:
@@ -42,8 +39,8 @@ class FeatureExtractor:
     def __init__(self, args):
         self.args = self.prepare_step1_add_feature_args(args)
 
-        self.masks_load_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step - 1}_MasksP2"
-        self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_Features"
+        self.masks_load_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step - 1}_MasksP2"
+        self.save_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_Features"
         self.save_path.mkdir(exist_ok=True, parents=True)
 
         self.w1_mask_filepaths = sorted(self.masks_load_path.rglob("*_W1.png"))
@@ -66,7 +63,7 @@ class FeatureExtractor:
                 self.w3_mask_filepaths,
                 self.w5_mask_filepaths,
         ):
-            # print(it0[0])
+            print(it0[0])
             assert sort_key_for_imgs(it0[0], "to_get_well_id_and_fov", self.args.plate_protocol) == \
                    sort_key_for_masks(it1) == \
                    sort_key_for_masks(it2) == \
@@ -266,8 +263,8 @@ class FeatureExtractor:
         #       f"{np.amax(mito_mask)}  "
         #       )
 
-        # import matplotlib.pyplot as plt
-        # from skimage.color import label2rgb
+        import matplotlib.pyplot as plt
+        from skimage.color import label2rgb
         # fig, axes = plt.subplots(1, 5, sharex=True, sharey=True)
         # axes[0].imshow(label2rgb(nucleus_mask), cmap="gray")
         # axes[1].imshow(label2rgb(cyto_mask), cmap="gray")
@@ -434,36 +431,44 @@ class FeatureExtractor:
 def step4_single_run_loop(args, myclass=FeatureExtractor):
 
     # 2) get features
+    n_rows = 0
     inst = myclass(args)
-    
-    bag = db.from_sequence(range(inst.args.N), partition_size=args.partition_size)
+    T = inst.args.N * inst.N_ub
+    metadata_features = np.zeros((T, len(inst.args.metadata_feature_cols)), dtype=object)
+    bbox_features = create_shared_np_num_arr((T, len(inst.args.bbox_feature_cols)), c_dtype="c_float")
+    misc_features = create_shared_np_num_arr((T, len(inst.args.misc_feature_cols)), c_dtype="c_float")
+    shape_features = create_shared_np_num_arr((T, len(inst.args.shape_feature_cols)), c_dtype="c_float")
+    intensity_features = create_shared_np_num_arr((T, len(inst.args.intensity_feature_cols)), c_dtype="c_float")
+    texture_features = create_shared_np_num_arr((T, len(inst.args.texture_feature_cols)), c_dtype="c_float")
 
-    bag = bag.map(lambda idx: process_feature_extraction(inst, idx))
+    # metadata_features = np.zeros((T, len(inst.args.metadata_feature_cols)), dtype=object)
+    # bbox_features = np.zeros((T, len(inst.args.bbox_feature_cols)), dtype=np.float32)
+    # misc_features = np.zeros((T, len(inst.args.misc_feature_cols)), dtype=np.float32)
+    # shape_features = np.zeros((T, len(inst.args.shape_feature_cols)), dtype=np.float32)
+    # intensity_features = np.zeros((T, len(inst.args.intensity_feature_cols)), dtype=np.float32)
+    # texture_features = np.zeros((T, len(inst.args.texture_feature_cols)), dtype=np.float32)
 
-    results = bag.compute()
+    for idx in tqdm(range(inst.args.N), total=inst.args.N):
+            out = inst.step2_get_features(idx)
+            if out is not None:
+                ncells = out[0].shape[0]
+                start = n_rows
+                end = start + ncells
+                # metadata, bbox_, misc_, shape_, intensity_, texture_ = out
+                metadata_features[start:end, :] = out[0]
+                bbox_features[start:end, :] = out[1]
+                misc_features[start:end, :] = out[2]
+                shape_features[start:end, :] = out[3]
+                intensity_features[start:end, :] = out[4]
+                texture_features[start:end, :] = out[5]
+                n_rows = end
 
-    metadata_features = []
-    bbox_features = []
-    misc_features = []
-    shape_features = []
-    intensity_features = []
-    texture_features = []
-
-    for out in results:
-        if out is not None:
-            metadata_features.append(out[0])
-            bbox_features.append(out[1])
-            misc_features.append(out[2])
-            shape_features.append(out[3])
-            intensity_features.append(out[4])
-            texture_features.append(out[5])
-
-    metadata_features = np.vstack(metadata_features)
-    bbox_features = np.vstack(bbox_features)
-    misc_features = np.vstack(misc_features)
-    shape_features = np.vstack(shape_features)
-    intensity_features = np.vstack(intensity_features)
-    texture_features = np.vstack(texture_features)
+    metadata_features = metadata_features[0:n_rows]
+    bbox_features = bbox_features[0:n_rows]
+    misc_features = misc_features[0:n_rows]
+    shape_features = shape_features[0:n_rows]
+    intensity_features = intensity_features[0:n_rows]
+    texture_features = texture_features[0:n_rows]
 
     # save features and metadata
     print("converting features numpy arrays to a pandas dataframes and saving them as csv files ...")
@@ -474,48 +479,87 @@ def step4_single_run_loop(args, myclass=FeatureExtractor):
     intensity_features = pd.DataFrame(intensity_features, columns=inst.args.intensity_feature_cols)
     texture_features = pd.DataFrame(texture_features, columns=inst.args.texture_feature_cols)
 
-    metadata_features.to_parquet(inst.save_path / f"metadata_features.parquet", index=False)
-    bbox_features.to_parquet(inst.save_path / f"bbox_features.parquet", index=False)
-    misc_features.to_parquet(inst.save_path / f"misc_features.parquet", index=False)
-    shape_features.to_parquet(inst.save_path / f"shape_features.parquet", index=False)
-    intensity_features.to_parquet(inst.save_path / f"intensity_features.parquet", index=False)
-    texture_features.to_parquet(inst.save_path / f"texture_features.parquet", index=False)
-    # metadata_features.to_csv(inst.save_path / f"metadata_features.csv", index=False, float_format='%.2f')
-    # bbox_features.to_csv(inst.save_path / f"bbox_features.csv", index=False, float_format='%.2f')
-    # misc_features.to_csv(inst.save_path / f"misc_features.csv", index=False, float_format='%.2f')
-    # shape_features.to_csv(inst.save_path / f"shape_features.csv", index=False, float_format='%.2f')
-    # intensity_features.to_csv(inst.save_path / f"intensity_features.csv", index=False, float_format='%.2f')
-    # texture_features.to_csv(inst.save_path / f"texture_features.csv", index=False, float_format='%.2f')
+    metadata_features.to_csv(inst.save_path / f"metadata_features.csv", index=False, float_format="%.2f")
+    bbox_features.to_csv(inst.save_path / f"bbox_features.csv", index=False, float_format="%.2f")
+    misc_features.to_csv(inst.save_path / f"misc_features.csv", index=False, float_format="%.2f")
+    shape_features.to_csv(inst.save_path / f"shape_features.csv", index=False, float_format="%.2f")
+    intensity_features.to_csv(inst.save_path / f"intensity_features.csv", index=False, float_format="%.2f")
+    texture_features.to_csv(inst.save_path / f"texture_features.csv", index=False, float_format="%.2f")
 
 
-    args.logger.info(f"Features and metadata saved to {inst.save_path}")
+def step4_multi_run_loop(args, myclass=FeatureExtractor):
+    """ We have to Register the FeatureExtractor class object as well as its attributes as shared using:
+    https://stackoverflow.com/questions/26499548/accessing-an-attribute-of-a-multiprocessing-proxy-of-a-class"""
+    start_time = time.time()
+    print("Cellpaint Step 4: feature extraction ...")
+    MyManager = MyBaseManager()
+    # register the custom class on the custom manager
+    MyManager.register(myclass.__name__, myclass, TestProxy)
+    # create a new manager instance
+    with MyManager as manager:
+        inst = getattr(manager, myclass.__name__)(args)
+        n_rows = 0
+        T = inst.args.N * inst.N_ub
+        metadata_features = np.zeros((T, len(inst.args.metadata_feature_cols)), dtype=object)
+        bbox_features = create_shared_np_num_arr((T, len(inst.args.bbox_feature_cols)), c_dtype="c_float")
+        misc_features = create_shared_np_num_arr((T, len(inst.args.misc_feature_cols)), c_dtype="c_float")
+        shape_features = create_shared_np_num_arr((T, len(inst.args.shape_feature_cols)), c_dtype="c_float")
+        intensity_features = create_shared_np_num_arr((T, len(inst.args.intensity_feature_cols)), c_dtype="c_float")
+        texture_features = create_shared_np_num_arr((T, len(inst.args.texture_feature_cols)), c_dtype="c_float")
 
-    del metadata_features
-    del bbox_features
-    del misc_features
-    del shape_features
-    del intensity_features
-    del texture_features
-    del results
-    del bag
-    
+        # metadata_features = np.zeros((T, len(inst.args.metadata_feature_cols)), dtype=object)
+        # bbox_features = np.zeros((T, len(inst.args.bbox_feature_cols)), dtype=np.float32)
+        # misc_features = np.zeros((T, len(inst.args.misc_feature_cols)), dtype=np.float32)
+        # shape_features = np.zeros((T, len(inst.args.shape_feature_cols)), dtype=np.float32)
+        # intensity_features = np.zeros((T, len(inst.args.intensity_feature_cols)), dtype=np.float32)
+        # texture_features = np.zeros((T, len(inst.args.texture_feature_cols)), dtype=np.float32)
 
+        with mp.Pool(processes=inst.num_workers) as pool:
+            """Using pool.imap whichs preserve order, so that no two processes write to the same row!!!"""
+            for out in tqdm(pool.imap(inst.step2_get_features, range(inst.args.N)), total=inst.args.N):
+                if out is not None:
+                    ncells = out[0].shape[0]
+                    start = n_rows
+                    end = start + ncells
+                    # metadata, bbox_, misc_, shape_, intensity_, texture_ = out
+                    metadata_features[start:end, :] = out[0]
+                    bbox_features[start:end, :] = out[1]
+                    misc_features[start:end, :] = out[2]
+                    shape_features[start:end, :] = out[3]
+                    intensity_features[start:end, :] = out[4]
+                    texture_features[start:end, :] = out[5]
+                    n_rows = end
 
-def process_feature_extraction(inst, idx):
-    """
-    Extract features for a single index and update shared memory arrays.
-    """
-    out = inst.step2_get_features(idx)
-    if out is None:
-        return None
+        metadata_features = metadata_features[0:n_rows]
+        bbox_features = bbox_features[0:n_rows]
+        misc_features = misc_features[0:n_rows]
+        shape_features = shape_features[0:n_rows]
+        intensity_features = intensity_features[0:n_rows]
+        texture_features = texture_features[0:n_rows]
 
-    return out
+        # save features and metadata
+        print("Converting features numpy arrays to a pandas dataframes and saving them as csv files ...")
+        metadata_features = pd.DataFrame(metadata_features, columns=inst.args.metadata_feature_cols)
+        bbox_features = pd.DataFrame(bbox_features, columns=inst.args.bbox_feature_cols)
+        misc_features = pd.DataFrame(misc_features, columns=inst.args.misc_feature_cols)
+        shape_features = pd.DataFrame(shape_features, columns=inst.args.shape_feature_cols)
+        intensity_features = pd.DataFrame(intensity_features, columns=inst.args.intensity_feature_cols)
+        texture_features = pd.DataFrame(texture_features, columns=inst.args.texture_feature_cols)
 
+        metadata_features.to_csv(inst.save_path / f"metadata_features.csv", index=False, float_format="%.2f")
+        bbox_features.to_csv(inst.save_path / f"bbox_features.csv", index=False, float_format="%.2f")
+        misc_features.to_csv(inst.save_path / f"misc_features.csv", index=False, float_format="%.2f")
+        shape_features.to_csv(inst.save_path / f"shape_features.csv", index=False, float_format="%.2f")
+        intensity_features.to_csv(inst.save_path / f"intensity_features.csv", index=False, float_format="%.2f")
+        texture_features.to_csv(inst.save_path / f"texture_features.csv", index=False, float_format="%.2f")
+
+        print(f"Finished Cellpaint step 4 in: {(time.time() - start_time) / 3600} hours\n")
+        return inst.args
 
 
 def step4_main_run_loop(args, myclass=FeatureExtractor):
-    """
-    This function is the main entry point for the feature extraction step of the SPACe pipeline.
-    It initializes the FeatureExtractor class and runs the feature extraction process.
-    """
-    step4_single_run_loop(args, myclass)
+    # args.mode = "test"
+    if args.mode == "test":
+        step4_single_run_loop(args, myclass)
+    else:
+        step4_multi_run_loop(args, myclass)
