@@ -39,8 +39,8 @@ class FeatureExtractor:
     def __init__(self, args):
         self.args = self.prepare_step1_add_feature_args(args)
 
-        self.masks_load_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step - 1}_MasksP2"
-        self.save_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_Features"
+        self.masks_load_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step - 1}_MasksP2"
+        self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_Features"
         self.save_path.mkdir(exist_ok=True, parents=True)
 
         self.w1_mask_filepaths = sorted(self.masks_load_path.rglob("*_W1.png"))

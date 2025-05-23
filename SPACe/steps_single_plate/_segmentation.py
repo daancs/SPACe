@@ -209,9 +209,9 @@ class SegmentationPartII:
             self.save_path = self.args.main_path / self.args.experiment / f"Step0_MasksP2-Preview"
             self.num_workers = self.args.N
         else:
-            self.load_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step-1}_MasksP1"
-            self.save_path = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_MasksP2"
-            self.save_path2 = self.args.main_path / self.args.experiment / f"Step{self.analysis_step}_MasksColor"
+            self.load_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step-1}_MasksP1"
+            self.save_path = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksP2"
+            self.save_path2 = self.args.output_path / self.args.experiment / f"Step{self.analysis_step}_MasksColor"
         self.save_path.mkdir(exist_ok=True, parents=True)
         self.save_path2.mkdir(exist_ok=True, parents=True)
 
