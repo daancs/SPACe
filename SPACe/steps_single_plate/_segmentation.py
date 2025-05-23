@@ -228,7 +228,7 @@ class SegmentationPartII:
                 assert sort_key_for_imgs(it0[0], "to_get_well_id_and_fov", self.args.plate_protocol) == \
                 sort_key_for_masks(it1) == sort_key_for_masks(it2)
                 # print(it0[0].stem, '\n', it1.stem, '\n', it2.stem, '\n')
-        self.num_workers = min(16, mp.cpu_count(), self.args.N)
+        self.num_workers = self.args.num_workers
 
     def run_demo(self, img_group, img, w1_mask, w2_mask):
         well_id, fov = sort_key_for_imgs(img_group[0], "to_get_well_id_and_fov", self.args.plate_protocol)
