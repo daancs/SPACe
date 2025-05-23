@@ -25,7 +25,7 @@ from scipy.ndimage import find_objects
 from cellpose import models
 import pyclesperanto_prototype as cle
 
-from SPACe.steps_single_plate.step0_args import Args, \
+from SPACe.SPACe.steps_single_plate.step0_args import Args, \
     load_img, sort_key_for_imgs, sort_key_for_masks, set_mask_save_name
 
 
