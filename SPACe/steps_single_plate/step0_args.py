@@ -405,6 +405,7 @@ class Args(object):
             output_path="results",
             partition_size=50,
             data_pct=1.0,
+            num_workers=8,
     ):
         """
             experiment:
@@ -498,6 +499,7 @@ class Args(object):
         self.args.output_path = output_path
         self.args.partition_size = partition_size
         self.args.data_pct = data_pct
+        self.args.num_workers = num_workers
 
         self.args.logger = createLogger()
 
