@@ -6,9 +6,9 @@ from pathlib import WindowsPath
 import numpy as np
 import multiprocessing as mp
 
-from SPACe.steps_single_plate.step0_args import Args
-from SPACe.utils.shared_memory import MyBaseManager, TestProxy
-from SPACe.steps_single_plate._segmentation import SegmentationPartII
+from SPACe.SPACe.steps_single_plate.step0_args import Args
+from SPACe.SPACe.utils.shared_memory import MyBaseManager, TestProxy
+from SPACe.SPACe.steps_single_plate._segmentation import SegmentationPartII
 
 
 def step3_main_run_loop(args, myclass=SegmentationPartII):

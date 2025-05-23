@@ -13,9 +13,9 @@ from skimage.measure import label
 from scipy.ndimage import find_objects
 from scipy.stats import median_abs_deviation
 
-from SPACe.utils.shared_memory import MyBaseManager, TestProxy, create_shared_np_num_arr
-from SPACe.utils.skimage_regionprops_extension import RegionPropertiesExtension, TEXTURE_FEATURE_NAMES
-from SPACe.steps_single_plate.step0_args import Args, load_img, \
+from SPACe.SPACe.utils.shared_memory import MyBaseManager, TestProxy, create_shared_np_num_arr
+from SPACe.SPACe.utils.skimage_regionprops_extension import RegionPropertiesExtension, TEXTURE_FEATURE_NAMES
+from SPACe.SPACe.steps_single_plate.step0_args import Args, load_img, \
     sort_key_for_imgs, sort_key_for_masks, containsLetterAndNumber
 
 import re

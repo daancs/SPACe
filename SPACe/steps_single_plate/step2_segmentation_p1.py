@@ -4,8 +4,8 @@ from tqdm import tqdm
 from pathlib import WindowsPath
 
 import numpy as np
-from SPACe.steps_single_plate.step0_args import Args
-from SPACe.steps_single_plate._segmentation import SegmentationPartI
+from SPACe.SPACe.steps_single_plate.step0_args import Args
+from SPACe.SPACe.steps_single_plate._segmentation import SegmentationPartI
 
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
 
