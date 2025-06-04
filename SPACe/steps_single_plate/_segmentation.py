@@ -318,7 +318,10 @@ class SegmentationPartII:
         if isinstance(w5_mask, np.ndarray):
             w5_mask = w5_mask.get()
 
-
+        save_name_1 = str(self.save_path2 / set_mask_save_name(well_id, fov, 0))
+        save_name_2 = str(self.save_path2 / set_mask_save_name(well_id, fov, 1))
+        save_name_3 = str(self.save_path2 / set_mask_save_name(well_id, fov, 2))
+        save_name_4 = str(self.save_path2 / set_mask_save_name(well_id, fov, 4))
 
 
         sio.imsave(self.save_path / set_mask_save_name(well_id, fov, 0), w1_mask, check_contrast=False)
@@ -329,6 +332,11 @@ class SegmentationPartII:
         # Image.fromarray(w2_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 1))
         # Image.fromarray(w3_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 2))
         # Image.fromarray(w5_mask).save(self.save_path2 / set_mask_save_name(well_id, fov, 4))
+        cv2.imwrite(save_name_1, label2rgb(w1_mask, bg_label=0)) #This Works. Try making another variable to hold the name
+        cv2.imwrite(save_name_2, label2rgb(w2_mask, bg_label=0))
+        cv2.imwrite(save_name_3, label2rgb(w3_mask, bg_label=0))
+        cv2.imwrite(save_name_4, label2rgb(w5_mask, bg_label=0))
+
 
 
     def run_multi(self, index):
